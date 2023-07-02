@@ -1,25 +1,29 @@
-import std/[macros, strtabs, unicode, sequtils]
+import std/[macros, strtabs, unicode, sequtils, strutils]
 import macroplus
 
 
 type
   NCssNodeKind = enum
     ncnkWrapper
-    ncnkProperty
-    ncnkValue
-    ncnkCall
+    ncnkBlock
+    # ncnkValue
+    # ncnkProperty
+    # ncnkCall
 
   NCssContext = object
 
   NCssNode = ref object
-    case kind: NCssNodeKind
-    of ncnkCall: discard
-    else: discard
+    # case kind: NCssNodeKind
+    # of ncnkBlock: discard
+    # else: discard
 
+    kind: NCssNodeKind
+    selector: string
     props: StringTableRef
     children: seq[NCssNode]
 
   NCss = object
+
 
 func un(s: string): Rune =
   s.runeAt 0
@@ -35,122 +39,157 @@ func normalizeNcssIdent*(s: string): string =
       of un"꞉": un":"
       of un"＜": un"<"
       of un"＋": un"+"
-      else: c
+      else: toLower c
 
   $acc
 
 
-func unwrapNestedInfixImpl(n: NimNode, infixLit: string, result: var seq[NimNode]) =
-  if n.matchInfix infixLit:
-    result.add n[InfixLeftSide]
-    unwrapNestedInfixImpl n[InfixRightSide], infixLit, result
+func unwrapNestedCommandsImpl(n: NimNode, result: var seq[NimNode]) =
+  case n.kind
+  of nnkCommand:
+    result.add n[0]
+    unwrapNestedCommandsImpl n[1], result
   else:
     result.add n
 
-func unwrapNestedInfix(n: NimNode, infixLit: string): seq[NimNode] =
-  unwrapNestedInfixImpl n, infixLit, result
+func unwrapNestedCommands(n: NimNode): seq[NimNode] =
+  unwrapNestedCommandsImpl n, result
 
+func mapp[A, B](fn: proc(a: A): B, s: seq[A]): seq[B] = 
+  for i in s:
+    result.add fn i
 
-func parseNcss(nimTree: NimNode): NCssNode =
-  result = NCssNode(kind: ncnkWrapper)
+func parseNcss(nimTree: NimNode): NimNode =
+  result = newTree(nnkBracket)
 
   for n in nimTree:
     case n.kind
-    of nnkInfix:
-
+    of nnkCall:
       let
-        body = n[InfixBody]
-        selectors =
-          unwrapNestedInfix(n, "..").
-          mapIt(normalizeNcssIdent it.strVal)
+        id = n[CallIdent]
+        selectors = mapp normalizeNcssIdent:
+          case id.kind
+          of nnkIdent: @[id.strVal]
+          of nnkTupleConstr: id.children.toseq.mapIt it.strVal
+          else: raise newException(ValueError, "!+!")
+          
+
+        body = n[CallBody]
 
       debugecho selectors
 
-    of nnkCall:
-      let
-        selector = n[CallIdent].strVal.normalizeNcssIdent
-        body = n[CallArgs[0]]
+      var acc = newTree(nnkTableConstr)
 
+      for sett in body:
+        let
+          prop = sett[AsgnLeftSide]
+          # prop = normalizeNcssIdent sett[AsgnLeftSide].strVal
+          val = unwrapNestedCommands sett[AsgnRightSide]
+          finalValue = block:
+            var acc = newTree(nnkBracket)
 
-      debugecho @[selector]
+            for v in val:
+              acc.add inlineQuote $`v`
+
+            inlineQuote `acc`.join " "
+
+        acc.add newColonExpr(prop, finalValue)
+        debugecho prop, ": ", repr finalValue
+
+      let sss = selectors.join ", "
+
+      result.add quote do:
+        NCssNode(
+          kind: ncnkBlock,
+          selector: `sss`,
+          props: newStringTable(`acc`))
+
 
     else:
       discard
 
+  result = quote:
+    NCssNode(
+      kind: ncnkWrapper,
+      children: @`result`)
+
+  debugecho repr result
+  debugecho "......................"
+
+
+
 macro css(body): untyped =
-  discard parseNcss body
-  newlit 1
+  parseNcss body
+
+type
+  Pixel = distinct int
+  Percent = distinct float
 
 
-let localStyles = css:
-  # var globe = 2
+func `%`[N: SomeNumber](v: N): Percent =
+  v.toFloat.Percent
 
-  ․extender:
-    width: 4.px
-    cursor: e—resize
-
-  ․side—bar .. ․btn:
-    right: 0
-    top: 0
-
-  # ․tool—bar꞉hover＜p＋[attribute = value]:
-    # left: 0
-    # top: %50
-    # transform: translateY( - %50)
+func `$`(v: Percent): string =
+  $v.int & "%"
 
 
-#[
-  Call
-    Ident "․side—bar"
-    StmtList
-      Call
-        Ident "right"
-        StmtList
-          IntLit 0
-      Call
-        Ident "top"
-        StmtList
-          IntLit 0
-  Infix
-    Ident ".."
-    BracketExpr
-      Ident "․tool—bar꞉hover＜p＋"
-      ExprEqExpr
-        Ident "attribute"
-        Ident "value"
-    Ident "․btn"
-    StmtList
-      Call
-        Ident "left"
-        StmtList
-          IntLit 0
-      Call
-        Ident "top"
-        StmtList
-          Prefix
-            Ident "%"
-            IntLit 50
-      Call
-        Ident "transform"
-        StmtList
-          Call
-            Ident "translateY"
-            Prefix
-              Ident "-"
-              Prefix
-                Ident "%"
-                IntLit 50
-  Call
-    Ident "․extender"
-    StmtList
-      Call
-        Ident "width"
-        StmtList
-          DotExpr
-            IntLit 4
-            Ident "px"
-      Call
-        Ident "cursor"
-        StmtList
-          Ident "e—resize"
-]#
+func `'px`(v: string): Pixel =
+  v.parseInt.Pixel
+
+func `$`(v: Pixel): string =
+  $v.int & "px"
+
+
+func `$`(n: NCssNode): string =
+  case n.kind
+  of ncnkWrapper:
+    for c in n.children:
+      result.add $c
+      result.add "\n"
+
+  of ncnkBlock:
+    result.add n.selector
+    result.add " {\n"
+    for p, v in n.props:
+      result.add repeat(' ', 2)
+      result.add p
+      result.add ": "
+      result.add v
+      result.add ";\n"
+    result.add "}"
+
+
+macro defProp(ns: varargs[untyped]): untyped =
+  result = newStmtList()
+
+  for n in ns:
+    let normalized = newLit normalizeNcssIdent n.strVal
+    result.add quote do:
+      const `n` = `normalized`
+
+
+defProp border—radius, border—width,
+        e—resize, cursor,
+        left, right, top, bottom
+
+
+# dumpTree:
+let localStyles =
+  css:
+    # var globe = 2
+
+    ․extender:
+      border—width = 4'px
+      cursor = pointer
+
+    (․side—bar, ․btn):
+      cursor = e—resize
+      border—radius = 0 0 2'px 10'px
+
+    ․tool—bar꞉hover＜p:
+      left = 0
+      top = %50
+      # transform = translateY( - %50)
+
+
+echo localStyles
