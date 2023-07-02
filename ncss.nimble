@@ -1,8 +1,8 @@
 # Package
 
-version       = "0.1.0"
+version       = "0.0.1"
 author        = "hamidb80"
-description   = "A new awesome nimble package"
+description   = "write CSS with Nim! Inspired by Sass & Less"
 license       = "MIT"
 srcDir        = "src"
 
