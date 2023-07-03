@@ -7,9 +7,6 @@ type
   NCssNodeKind = enum
     ncnkWrapper
     ncnkBlock
-    # ncnkValue
-    # ncnkProperty
-    # ncnkCall
 
   NCssNode = ref object
     kind: NCssNodeKind
@@ -22,21 +19,18 @@ type
 func un(s: string): Rune =
   s.runeAt 0
 
+func normalizeNcssRune*(c: Rune): Rune =
+  case c
+  of un"—": un"-"
+  of un"﹟": un"#"
+  of un"․": un"."
+  of un"꞉": un":"
+  of un"＜": un"<"
+  of un"＋": un"+"
+  else: toLower c
+
 func normalizeNcssIdent*(s: string): string =
-  var acc: seq[Rune]
-
-  for c in s.toRunes:
-    acc.add:
-      case c
-      of un"—": un"-"
-      of un"﹟": un"#"
-      of un"․": un"."
-      of un"꞉": un":"
-      of un"＜": un"<"
-      of un"＋": un"+"
-      else: toLower c
-
-  $acc
+  $s.toRunes.map(normalizeNcssRune)
 
 
 func unwrapNestedCommandsImpl(n: NimNode, result: var seq[NimNode]) =
