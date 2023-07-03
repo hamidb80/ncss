@@ -1,5 +1,6 @@
 import std/[macros, strtabs, unicode, sequtils, strutils]
 import macroplus
+import ncss/[utils, types]
 
 
 type
@@ -10,20 +11,13 @@ type
     # ncnkProperty
     # ncnkCall
 
-  NCssContext = object
-
   NCssNode = ref object
-    # case kind: NCssNodeKind
-    # of ncnkBlock: discard
-    # else: discard
-
     kind: NCssNodeKind
     selector: string
     props: StringTableRef
     children: seq[NCssNode]
 
-  NCss = object
-
+# ----- def -----
 
 func un(s: string): Rune =
   s.runeAt 0
@@ -35,6 +29,7 @@ func normalizeNcssIdent*(s: string): string =
     acc.add:
       case c
       of un"—": un"-"
+      of un"﹟": un"#"
       of un"․": un"."
       of un"꞉": un":"
       of un"＜": un"<"
@@ -53,11 +48,11 @@ func unwrapNestedCommandsImpl(n: NimNode, result: var seq[NimNode]) =
     result.add n
 
 func unwrapNestedCommands(n: NimNode): seq[NimNode] =
+  ## converts `a b c d` as Command(a, Command(b, Command(c, d)))
+  ## to @[a, b, c, d]
+
   unwrapNestedCommandsImpl n, result
 
-func mapp[A, B](fn: proc(a: A): B, s: seq[A]): seq[B] = 
-  for i in s:
-    result.add fn i
 
 func parseNcss(nimTree: NimNode): NimNode =
   result = newTree(nnkBracket)
@@ -72,18 +67,15 @@ func parseNcss(nimTree: NimNode): NimNode =
           of nnkIdent: @[id.strVal]
           of nnkTupleConstr: id.children.toseq.mapIt it.strVal
           else: raise newException(ValueError, "!+!")
-          
 
         body = n[CallBody]
 
-      debugecho selectors
+      # debugecho selectors
 
       var acc = newTree(nnkTableConstr)
-
       for sett in body:
         let
           prop = sett[AsgnLeftSide]
-          # prop = normalizeNcssIdent sett[AsgnLeftSide].strVal
           val = unwrapNestedCommands sett[AsgnRightSide]
           finalValue = block:
             var acc = newTree(nnkBracket)
@@ -94,19 +86,18 @@ func parseNcss(nimTree: NimNode): NimNode =
             inlineQuote `acc`.join " "
 
         acc.add newColonExpr(prop, finalValue)
-        debugecho prop, ": ", repr finalValue
+        # debugecho prop, ": ", repr finalValue
 
-      let sss = selectors.join ", "
 
+      let s = selectors.join ", "
       result.add quote do:
         NCssNode(
           kind: ncnkBlock,
-          selector: `sss`,
+          selector: `s`,
           props: newStringTable(`acc`))
 
 
-    else:
-      discard
+    else: discard
 
   result = quote:
     NCssNode(
@@ -117,30 +108,19 @@ func parseNcss(nimTree: NimNode): NimNode =
   debugecho "......................"
 
 
-
-macro css(body): untyped =
+macro css*(body): untyped =
   parseNcss body
 
-type
-  Pixel = distinct int
-  Percent = distinct float
+macro defProp(ns: varargs[untyped]): untyped =
+  result = newStmtList()
+
+  for n in ns:
+    let normalized = newLit normalizeNcssIdent n.strVal
+    result.add quote do:
+      const `n` = `normalized`
 
 
-func `%`[N: SomeNumber](v: N): Percent =
-  v.toFloat.Percent
-
-func `$`(v: Percent): string =
-  $v.int & "%"
-
-
-func `'px`(v: string): Pixel =
-  v.parseInt.Pixel
-
-func `$`(v: Pixel): string =
-  $v.int & "px"
-
-
-func `$`(n: NCssNode): string =
+func `$`*(n: NCssNode): string =
   case n.kind
   of ncnkWrapper:
     for c in n.children:
@@ -159,19 +139,12 @@ func `$`(n: NCssNode): string =
     result.add "}"
 
 
-macro defProp(ns: varargs[untyped]): untyped =
-  result = newStmtList()
-
-  for n in ns:
-    let normalized = newLit normalizeNcssIdent n.strVal
-    result.add quote do:
-      const `n` = `normalized`
-
-
 defProp border—radius, border—width,
         e—resize, cursor,
         left, right, top, bottom
 
+
+# ----- usage -----
 
 # dumpTree:
 let localStyles =
@@ -189,7 +162,11 @@ let localStyles =
     ․tool—bar꞉hover＜p:
       left = 0
       top = %50
+      # ․side—bar
+      # ․side—bar(4'px, red)
       # transform = translateY( - %50)
 
 
-echo localStyles
+when isMainModule:
+  echo "\n\n"
+  echo localStyles
